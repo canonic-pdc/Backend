@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.env
+*.env.*
+.env.local
+.env*.local
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Credentials & Service Accounts
+*service-account*.json
+*serviceAccount*.json
+*-adminsdk-*.json
+*.pem
+*.key
+*.p12
+
+# IDE, AI & Build Cache
+.idea/
+.vscode/
+.gemini/
+*.tsbuildinfo

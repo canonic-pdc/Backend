@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: Memastikan user telah terautentikasi melalui Firebase Auth
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: Mengambil data dokumen pengguna dari koleksi /users
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Helper: Memeriksa apakah user terautentikasi dan memiliki salah satu dari role yang diizinkan
+    function hasRole(allowedRoles) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().role in allowedRoles;
+    }
+
+    // --- 1. KOLEKSI USERS (Manajemen Hak Akses) ---
+    match /users/{userId} {
+      // User dapat membaca datanya sendiri, admin dapat membaca semua data
+      allow read: if isAuthenticated() && (request.auth.uid == userId || hasRole(['admin']));
+      
+      // Mengizinkan pendaftaran akun pertama kali (user baru membuat profilnya sendiri)
+      allow create: if isAuthenticated() && request.auth.uid == userId; 
+      
+      // Mengizinkan update profil sendiri (tapi tidak boleh mengganti 'role' sendiri secara ilegal)
+      allow update: if isAuthenticated() && (
+        hasRole(['admin']) || 
+        (request.auth.uid == userId && request.resource.data.role == resource.data.role)
+      );
+      
+      // Hanya admin yang bisa menghapus user
+      allow delete: if hasRole(['admin']);
+    }
+
+    // --- 2. KOLEKSI JOB COSTING 1 (Lembaran) ---
+    match /Job Costing 1/{pdcId} {
+      allow read: if hasRole(['admin', 'editor', 'viewer']);
+      allow write: if hasRole(['admin', 'editor']);
+
+      match /vehicles/{vehicleId} {
+        allow read: if hasRole(['admin', 'editor', 'viewer']);
+        allow write: if hasRole(['admin', 'editor']);
+      }
+      
+      match /detail_list/{detailId} {
+        allow read: if hasRole(['admin', 'editor', 'viewer']);
+        allow write: if hasRole(['admin', 'editor']);
+      }
+    }
+
+    // --- 3. KOLEKSI JOB COSTING 2 (Kaca Set) ---
+    match /Job Costing 2/{pdcId} {
+      allow read: if hasRole(['admin', 'editor', 'viewer']);
+      allow write: if hasRole(['admin', 'editor']);
+
+      match /vehicles/{vehicleId} {
+        allow read: if hasRole(['admin', 'editor', 'viewer']);
+        allow write: if hasRole(['admin', 'editor']);
+      }
+      
+      match /detail_list/{detailId} {
+        allow read: if hasRole(['admin', 'editor', 'viewer']);
+        allow write: if hasRole(['admin', 'editor']);
+      }
+    }
+
+    // --- 4. KOLEKSI DO (Delivery Order) ---
+    match /DO/{pdcId} {
+      allow read: if hasRole(['admin', 'editor', 'viewer']);
+      allow write: if hasRole(['admin', 'editor']);
+
+      match /vehicles/{vehicleId} {
+        allow read: if hasRole(['admin', 'editor', 'viewer']);
+        allow write: if hasRole(['admin', 'editor']);
+      }
+      
+      match /detail_list/{detailId} {
+        allow read: if hasRole(['admin', 'editor', 'viewer']);
+        allow write: if hasRole(['admin', 'editor']);
+      }
+    }
+
+    // --- 5. KOLEKSI ORDINANCE (Substitusi Kaca Film) ---
+    match /Ordinance/{ordinanceId} {
+      allow read: if hasRole(['admin', 'editor', 'viewer']);
+      allow write: if hasRole(['admin', 'editor']);
+    }
+
+    // --- 6. KOLEKSI SYSTEM (Metadata & Versi Skema) ---
+    match /system/{document=**} {
+      allow read: if isAuthenticated();
+      allow write: if hasRole(['admin']);
+    }
+  }
+}
+
