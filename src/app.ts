@@ -3,10 +3,10 @@ import 'module-alias/register';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import config from '@config/index';
-import { requestLogger } from '@shared/middleware/request-logger.middleware';
-import { notFoundHandler } from '@shared/middleware/not-found.middleware';
-import { errorHandler } from '@shared/middleware/error-handler.middleware';
+import config from './config/index';
+import { requestLogger } from './shared/middleware/request-logger.middleware';
+import { notFoundHandler } from './shared/middleware/not-found.middleware';
+import { errorHandler } from './shared/middleware/error-handler.middleware';
 import v1Routes from './routes/v1';
 
 const app = express();

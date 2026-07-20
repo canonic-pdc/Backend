@@ -9,6 +9,9 @@
   "functions": {
     "api/index.ts": {
       "includeFiles": "{tsconfig.json,package.json,dist/**,src/**}"
+    },
+    "src/app.ts": {
+      "includeFiles": "{tsconfig.json,package.json,dist/**,src/**}"
     }
   }
 }
