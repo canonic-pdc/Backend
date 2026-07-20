@@ -29,7 +29,7 @@ function sanitizeName(name: string): string {
  * GET /api/v1/collections/:collectionName
  * Retrieve list of all PDCs inside a collection, including vehicles and detail lists.
  */
-router.get('/:collectionName', requireAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/:collectionName', asyncHandler(async (req: any, res: Response) => {
   const { collectionName } = req.params;
   validateCollection(collectionName);
   
@@ -78,7 +78,7 @@ router.get('/:collectionName', requireAuth, asyncHandler(async (req: any, res: R
  * GET /api/v1/collections/:collectionName/pdc/:pdcName
  * Retrieve specific deep details of a specific PDC.
  */
-router.get('/:collectionName/pdc/:pdcName', requireAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/:collectionName/pdc/:pdcName', asyncHandler(async (req: any, res: Response) => {
   const { collectionName, pdcName } = req.params;
   validateCollection(collectionName);
 
