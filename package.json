@@ -23,7 +23,16 @@
     "firebase": "^12.16.0",
     "firebase-admin": "^14.2.0",
     "helmet": "^7.1.0",
+    "module-alias": "^2.2.3",
+    "tsconfig-paths": "^4.2.0",
     "zod": "^3.23.8"
+  },
+  "_moduleAliases": {
+    "@app": "src",
+    "@features": "src/features",
+    "@shared": "src/shared",
+    "@infrastructure": "src/infrastructure",
+    "@config": "src/config"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.0",
@@ -36,7 +45,6 @@
     "prettier": "^3.2.5",
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.8.10",
-    "tsconfig-paths": "^4.2.0",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.30.1"
   }
