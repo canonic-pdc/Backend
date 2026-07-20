@@ -13,6 +13,22 @@ process.on('uncaughtException', (err: Error) => {
   process.exit(1);
 });
 
+// Handle Server Errors (such as EADDRINUSE when port is occupied)
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+  if (error.code === 'EADDRINUSE') {
+    logger.error(`Port ${port} is already in use (EADDRINUSE).`);
+    logger.error(`Another process or keep-alive connection is still holding port ${port}.`);
+    logger.error(`To resolve on Windows, kill existing node processes using: taskkill /F /IM node.exe`);
+    process.exit(1);
+  } else {
+    logger.error(`HTTP Server error encountered: ${error.message}`);
+    throw error;
+  }
+});
+
 // Start HTTP Server
 server.listen(port, () => {
   logger.info(`Server started in [${config.app.env}] mode running on port ${port}`);
@@ -40,6 +56,11 @@ const gracefulShutdown = (signal: string) => {
     process.exit(0);
   });
 
+  // Close open keep-alive connections immediately so port releases promptly
+  if (server.closeAllConnections) {
+    server.closeAllConnections();
+  }
+
   // Force kill connection hang-ups after 10s timeout
   setTimeout(() => {
     logger.error('Shutdown sequence timed out. Forcing process termination.');
@@ -50,3 +71,15 @@ const gracefulShutdown = (signal: string) => {
 // Listen to termination signals
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Listen to nodemon restart signal (SIGUSR2)
+process.once('SIGUSR2', () => {
+  logger.info('Received SIGUSR2 (nodemon restart). Closing HTTP server and keep-alive connections...');
+  server.close(() => {
+    logger.info('HTTP Server stopped for nodemon restart.');
+    process.kill(process.pid, 'SIGUSR2');
+  });
+  if (server.closeAllConnections) {
+    server.closeAllConnections();
+  }
+});

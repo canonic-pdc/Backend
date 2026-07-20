@@ -23,6 +23,20 @@ app.use(requestLogger);
 // Versioned APIs Router Mount
 app.use(config.api.prefix, v1Routes);
 
+// Root health & service status endpoint (helpful for Vercel deployment checks)
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Canonic API Service is running and operational.',
+    environment: config.app.env || 'development',
+    version: '1.0.0',
+    endpoints: {
+      base: config.api.prefix,
+      health: `${config.api.prefix}/health`,
+    },
+  });
+});
+
 // 404 handler fallback
 app.use(notFoundHandler);
 

@@ -199,3 +199,30 @@ Follow these steps to expand the backend with a new business domain (e.g., `repo
 - [ ] **Firebase Authentication**: Hook up Firebase Admin verification within the `requireAuth` middleware to inspect incoming JWTs.
 - [ ] **Firestore Database Client**: Initialize the Firestore Database inside `FirestoreProvider` to bind repositories with actual cloud collections.
 - [ ] **Rate Limiting**: Hook up standard security limiters to prevent API route scraping.
+
+---
+
+## Deployment (Vercel)
+
+This application is fully pre-configured for serverless deployment on **Vercel** using `@vercel/node`.
+
+### 1. Configuration Files
+- `api/index.ts`: The serverless handler entry point that exports the Express `app` instance directly.
+- `vercel.json`: Vercel routing settings redirecting all incoming HTTP traffic (`/(.*)`) directly to the serverless entry point `api/index.ts`.
+- `.vercelignore`: Excludes local compilation folders (`dist`, `node_modules`) to optimize function package sizes.
+
+### 2. Environment Variables on Vercel
+In your Vercel Project Dashboard under **Settings -> Environment Variables**, configure:
+- `NODE_ENV`: `production`
+- `API_PREFIX`: `/api/v1`
+- `CORS_ORIGIN`: Comma-separated list of allowed frontend URLs (e.g., `https://canonic-pdc.vercel.app,http://localhost:5173`) or `*`.
+- `JWT_SECRET`: Production secret key for JWT signing.
+- `LOG_LEVEL`: `info`
+
+### 3. How to Deploy
+1. **Via Vercel CLI**:
+   ```bash
+   npx vercel
+   ```
+2. **Via Git Integration**:
+   Connect your GitHub/GitLab repository to Vercel and set the Root Directory to `Backend`. Vercel will automatically build and deploy every commit using the included `vercel.json` configuration.
