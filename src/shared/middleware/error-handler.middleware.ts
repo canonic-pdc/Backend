@@ -17,11 +17,11 @@ export const errorHandler = (
   let message = 'Internal Server Error';
   let errors: any = null;
 
-  if (err instanceof AppError) {
-    statusCode = err.statusCode;
+  if (err instanceof AppError || ('statusCode' in err && typeof (err as any).statusCode === 'number')) {
+    statusCode = (err as any).statusCode || 500;
     message = err.message;
-    if (err instanceof ValidationError) {
-      errors = err.errors;
+    if (err instanceof ValidationError || ('errors' in err && Boolean((err as any).errors))) {
+      errors = (err as any).errors;
     }
   } else {
     // Log non-operational, unexpected errors

@@ -26,7 +26,7 @@ app.use(requestLogger);
 app.use(config.api.prefix, v1Routes);
 
 // Root health & service status endpoint (helpful for Vercel deployment checks)
-app.get('/', (req, res) => {
+app.get(['/', '/api/index', '/api'], (req, res) => {
   res.status(200).json({
     success: true,
     message: 'Canonic API Service is running and operational.',
