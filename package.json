@@ -27,6 +27,9 @@
     "tsconfig-paths": "^4.2.0",
     "zod": "^3.23.8"
   },
+  "overrides": {
+    "jose": "4.15.9"
+  },
   "_moduleAliases": {
     "@app": "src",
     "@features": "src/features",
