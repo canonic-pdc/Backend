@@ -5,11 +5,14 @@ import { AuthenticatedRequest } from '../types';
 import { UnauthorizedError, ForbiddenError } from '../errors';
 import { FirebaseService } from '@infrastructure/firebase/firebase.service';
 import { config } from '@config/index';
+import { MemoryCache } from '../utils/cache.util';
+
+export const userRoleCache = new MemoryCache<string>(300); // 5 minutes TTL
 
 /**
  * Helper to verify ID Token using either Firebase Auth REST API or Google OAuth TokenInfo API.
  */
-async function verifyToken(token: string, apiKey?: string): Promise<{ uid: string; email: string; name: string }> {
+async function verifyToken(token: string, apiKey?: string): Promise<{ uid: string; email: string; name: string; role?: string }> {
   // 0. Try Firebase Admin SDK offline/online verifyIdToken first
   try {
     if (getApps().length > 0 && getApps()[0]) {
@@ -19,6 +22,7 @@ async function verifyToken(token: string, apiKey?: string): Promise<{ uid: strin
           uid: decoded.uid,
           email: decoded.email || '',
           name: decoded.name || decoded.email?.split('@')[0] || 'User',
+          role: typeof decoded.role === 'string' ? decoded.role : undefined,
         };
       }
     }
@@ -117,56 +121,67 @@ export const requireAuth = async (
 
   try {
     const decodedUser = await verifyToken(token, apiKey);
-    const { uid, email, name } = decodedUser;
+    const { uid, email, name, role: claimRole } = decodedUser;
 
-    // 3. Resolve or register user in Firestore 'users' collection via Admin SDK
-    const firebaseService = FirebaseService.getInstance();
-    const db = firebaseService.getDb();
-    
+    // 3. Resolve role from custom claims or cache first to avoid expensive Firestore lookup
     let role: string = 'viewer'; // Default fallback role
 
-    if (db) {
-      try {
-        const userDocRef = db.collection('users').doc(uid);
-        const userDocSnap = await userDocRef.get();
-
-        if (userDocSnap.exists) {
-          const userData = userDocSnap.data() || {};
-          role = userData.role || 'viewer';
-          console.log(`[Auth Middleware] Resolved existing user: ${email} (Role: ${role})`);
-        } else {
-          // Auto-registration for new users with default role 'viewer' and explicit null metadata
-          console.log(`[Auth Middleware] New user detected: ${email}. Registering with default 'viewer' role.`);
-          const now = new Date().toISOString();
-          const newUserProfile = {
-            id: uid,
-            email,
-            name,
-            role: 'viewer',
-            automationKeyHash: null,
-            automationKeyPrefix: null,
-            automationKeyStatus: null,
-            registeredDeviceId: null,
-            registeredDeviceName: null,
-            automationLastUsedAt: null,
-            automationLastUsedIp: null,
-            createdAt: now,
-            updatedAt: now,
-          };
-          await userDocRef.set(newUserProfile);
-          role = 'viewer';
-        }
-      } catch (dbErr: any) {
-        console.error('[Auth Middleware] Firestore user operation failed:', dbErr.message);
-        if (!isDevOrTest) {
-          return next(new UnauthorizedError('User authorization lookup failed'));
-        }
-        role = 'viewer';
-      }
+    if (claimRole) {
+      role = claimRole;
+      userRoleCache.set(uid, role);
     } else {
-      console.warn('[Auth Middleware] Firestore database is not initialized.');
-      if (!isDevOrTest) {
-        return next(new UnauthorizedError('Database connection unavailable'));
+      const cachedRole = userRoleCache.get(uid);
+      if (cachedRole) {
+        role = cachedRole;
+      } else {
+        const firebaseService = FirebaseService.getInstance();
+        const db = firebaseService.getDb();
+        
+        if (db) {
+          try {
+            const userDocRef = db.collection('users').doc(uid);
+            const userDocSnap = await userDocRef.get();
+
+            if (userDocSnap.exists) {
+              const userData = userDocSnap.data() || {};
+              role = userData.role || 'viewer';
+              console.log(`[Auth Middleware] Resolved existing user: ${email} (Role: ${role})`);
+            } else {
+              // Auto-registration for new users with default role 'viewer' and explicit null metadata
+              console.log(`[Auth Middleware] New user detected: ${email}. Registering with default 'viewer' role.`);
+              const now = new Date().toISOString();
+              const newUserProfile = {
+                id: uid,
+                email,
+                name,
+                role: 'viewer',
+                automationKeyHash: null,
+                automationKeyPrefix: null,
+                automationKeyStatus: null,
+                registeredDeviceId: null,
+                registeredDeviceName: null,
+                automationLastUsedAt: null,
+                automationLastUsedIp: null,
+                createdAt: now,
+                updatedAt: now,
+              };
+              await userDocRef.set(newUserProfile);
+              role = 'viewer';
+            }
+            userRoleCache.set(uid, role);
+          } catch (dbErr: any) {
+            console.error('[Auth Middleware] Firestore user operation failed:', dbErr.message);
+            if (!isDevOrTest) {
+              return next(new UnauthorizedError('User authorization lookup failed'));
+            }
+            role = 'viewer';
+          }
+        } else {
+          console.warn('[Auth Middleware] Firestore database is not initialized.');
+          if (!isDevOrTest) {
+            return next(new UnauthorizedError('Database connection unavailable'));
+          }
+        }
       }
     }
 
@@ -177,6 +192,7 @@ export const requireAuth = async (
     return next(new UnauthorizedError('Authentication failed: ' + error.message));
   }
 };
+
 
 /**
  * Authorization middleware. Requires requireAuth to have run prior.

@@ -5,12 +5,13 @@ import { AuthenticatedRequest } from '@shared/types';
 import {
   AutomationAuthenticatedRequest,
   AutomationSchemaType,
+  CheckVersionQueryDto,
   CheckVersionResponseDto,
 } from '../types/automation.types';
 import schemaGeneratorService from '../services/schemaGenerator.service';
 import apiKeyService from '../services/apiKey.service';
 
-const VALID_SCHEMA_TYPES: AutomationSchemaType[] = ['DO', 'JC1', 'JC2', 'Finishing', 'FinishingSet'];
+const VALID_SCHEMA_TYPES: AutomationSchemaType[] = ['DO', 'JC1', 'JC2', 'Finishing', 'FinishingSet', 'Ordinance'];
 
 export class AutomationController {
   /**
@@ -18,8 +19,7 @@ export class AutomationController {
    * Mengecek versi skema dan mengembalikan 304 Not Modified bila sama, atau 200 OK berserta JSON Murni bila berbeda.
    */
   public async checkVersion(req: AutomationAuthenticatedRequest, res: Response): Promise<Response | void> {
-    const typeQuery = req.query.type as string;
-    const localVersionQuery = req.query.localVersion;
+    const { type: typeQuery, localVersion: localVersionQuery } = (req.query || {}) as unknown as CheckVersionQueryDto;
 
     if (!typeQuery || !VALID_SCHEMA_TYPES.includes(typeQuery as AutomationSchemaType)) {
       throw new BadRequestError(

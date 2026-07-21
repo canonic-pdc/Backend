@@ -1,18 +1,23 @@
 import { Router, Response } from 'express';
 import { ResponseFormatter } from '@shared/responses';
 import { requireAuth, requireRoles } from '@shared/middleware/auth.middleware';
-import { asyncHandler } from '@shared/utils';
+import { asyncHandler, pLimit, MemoryCache } from '@shared/utils';
 import { FirebaseService } from '@infrastructure/firebase/firebase.service';
 import schemaMetaService from '@features/automation/services/schemaMeta.service';
+import { ConflictError, NotFoundError } from '@shared/errors';
+import { RootCollectionName, JobCosting1Document, JobCosting1Vehicle, DetailListItem } from '@shared/types';
+import { Query } from 'firebase-admin/firestore';
 
 const router = Router();
+const collectionsCache = new MemoryCache<any>(60); // 60 seconds TTL for collections sync data
+
 
 /**
  * Validates allowed root collections (`DO`, `Job Costing 1`, `Job Costing 2`, `Finishing`, `FinishingSet`).
  */
-function validateCollection(colName: string): asserts colName is 'Job Costing 1' | 'Job Costing 2' | 'DO' | 'Finishing' | 'FinishingSet' {
-  const allowed = ['Job Costing 1', 'Job Costing 2', 'DO', 'Finishing', 'FinishingSet'];
-  if (!allowed.includes(colName)) {
+function validateCollection(colName: string): asserts colName is RootCollectionName & ('Job Costing 1' | 'Job Costing 2' | 'DO' | 'Finishing' | 'FinishingSet') {
+  const allowed: RootCollectionName[] = ['Job Costing 1', 'Job Costing 2', 'DO', 'Finishing', 'FinishingSet'];
+  if (!allowed.includes(colName as RootCollectionName)) {
     throw new Error(`Invalid collection name: ${colName}. Allowed: ${allowed.join(', ')}`);
   }
 }
@@ -33,43 +38,70 @@ router.get('/:collectionName', asyncHandler(async (req: any, res: Response) => {
   const { collectionName } = req.params;
   validateCollection(collectionName);
   
+  const limitParam = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const pageParam = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+  const offsetParam = req.query.offset ? parseInt(req.query.offset as string, 10) : (limitParam && pageParam > 1 ? (pageParam - 1) * limitParam : undefined);
+
+  res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+
+  const cacheKey = `list:${collectionName}:${limitParam || 'all'}:${offsetParam || 0}`;
+  const cachedData = collectionsCache.get(cacheKey);
+  if (cachedData) {
+    return res.json(ResponseFormatter.success(cachedData, `Retrieved ${cachedData.length} documents from "${collectionName}" (cached).`));
+  }
+
   const db = FirebaseService.getInstance().getDb();
   if (!db) {
     throw new Error('Firebase Firestore database not initialized');
   }
 
-  const rootSnapshot = await db.collection(collectionName).get();
-  const allData: any[] = [];
-
-  for (const rootDoc of rootSnapshot.docs) {
-    const docId = rootDoc.id;
-    const docData = rootDoc.data();
-
-    // Get vehicles subcollection via Admin SDK
-    const vSnap = await db.collection(collectionName).doc(docId).collection('vehicles').get();
-    const vehicles = vSnap.docs.map(v => ({
-      id: v.id,
-      name: v.id,
-      ...v.data()
-    }));
-
-    // Get detail_list subcollection via Admin SDK
-    const dSnap = await db.collection(collectionName).doc(docId).collection('detail_list').get();
-    const detailList = dSnap.docs.map(d => ({
-      id: d.id,
-      ...d.data()
-    }));
-
-    allData.push({
-      id: docId,
-      pdcName: docId,
-      batchNumber: docData.batchNumber || docData.batch || '',
-      kodeGudang: docData.kodeGudang || docData.warehouseCode || '',
-      ...docData,
-      vehicles,
-      detailList
-    });
+  let query: Query = db.collection(collectionName);
+  if (typeof offsetParam === 'number' && !isNaN(offsetParam) && offsetParam > 0) {
+    query = query.offset(offsetParam);
   }
+  if (typeof limitParam === 'number' && !isNaN(limitParam) && limitParam > 0) {
+    query = query.limit(limitParam);
+  }
+
+  const rootSnapshot = await query.get();
+  const rootDocs = rootSnapshot.docs;
+
+  const limit = pLimit(15);
+
+  const allData = await Promise.all(
+    rootDocs.map(rootDoc => limit(async () => {
+      const docId = rootDoc.id;
+      const docData = rootDoc.data() as Partial<JobCosting1Document & { batch?: string; warehouseCode?: string }>;
+
+      const [vSnap, dSnap] = await Promise.all([
+        db.collection(collectionName).doc(docId).collection('vehicles').get(),
+        db.collection(collectionName).doc(docId).collection('detail_list').get()
+      ]);
+
+      const vehicles = vSnap.docs.map(v => ({
+        id: v.id,
+        name: v.id,
+        ...(v.data() as Partial<JobCosting1Vehicle>)
+      }));
+
+      const detailList = dSnap.docs.map(d => ({
+        id: d.id,
+        ...(d.data() as Partial<DetailListItem>)
+      }));
+
+      return {
+        id: docId,
+        pdcName: docId,
+        batchNumber: docData.batchNumber || docData.batch || '',
+        kodeGudang: docData.kodeGudang || docData.warehouseCode || '',
+        ...docData,
+        vehicles,
+        detailList
+      };
+    }))
+  );
+
+  collectionsCache.set(cacheKey, allData);
 
   res.json(ResponseFormatter.success(allData, `Retrieved ${allData.length} documents from "${collectionName}".`));
 }));
@@ -82,34 +114,45 @@ router.get('/:collectionName/pdc/:pdcName', asyncHandler(async (req: any, res: R
   const { collectionName, pdcName } = req.params;
   validateCollection(collectionName);
 
+  res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+
+  const sanitizedPdc = sanitizeName(pdcName);
+  const cacheKey = `pdc:${collectionName}:${sanitizedPdc}`;
+  const cachedData = collectionsCache.get(cacheKey);
+  if (cachedData) {
+    return res.json(ResponseFormatter.success(cachedData, `Retrieved details for PDC "${pdcName}" (cached).`));
+  }
+
   const db = FirebaseService.getInstance().getDb();
   if (!db) {
     throw new Error('Firebase Firestore database not initialized');
   }
 
-  const sanitizedPdc = sanitizeName(pdcName);
   const pdcDocRef = db.collection(collectionName).doc(sanitizedPdc);
   const docSnap = await pdcDocRef.get();
 
   if (!docSnap.exists) {
-    throw new Error(`PDC "${pdcName}" not found in "${collectionName}".`);
+    throw new NotFoundError(`PDC "${pdcName}" not found in "${collectionName}".`);
   }
 
-  const docData = docSnap.data() || {};
-  const vSnap = await db.collection(collectionName).doc(sanitizedPdc).collection('vehicles').get();
+  const docData = (docSnap.data() || {}) as Partial<JobCosting1Document & { batch?: string; warehouseCode?: string }>;
+  const [vSnap, dSnap] = await Promise.all([
+    db.collection(collectionName).doc(sanitizedPdc).collection('vehicles').get(),
+    db.collection(collectionName).doc(sanitizedPdc).collection('detail_list').get()
+  ]);
+
   const vehicles = vSnap.docs.map(v => ({
     id: v.id,
     name: v.id,
-    ...v.data()
+    ...(v.data() as Partial<JobCosting1Vehicle>)
   }));
 
-  const dSnap = await db.collection(collectionName).doc(sanitizedPdc).collection('detail_list').get();
   const detailList = dSnap.docs.map(d => ({
     id: d.id,
-    ...d.data()
+    ...(d.data() as Partial<DetailListItem>)
   }));
 
-  res.json(ResponseFormatter.success({
+  const payload = {
     id: sanitizedPdc,
     pdcName: sanitizedPdc,
     batchNumber: docData.batchNumber || docData.batch || '',
@@ -117,7 +160,11 @@ router.get('/:collectionName/pdc/:pdcName', asyncHandler(async (req: any, res: R
     ...docData,
     vehicles,
     detailList
-  }, `Retrieved details for PDC "${pdcName}".`));
+  };
+
+  collectionsCache.set(cacheKey, payload);
+
+  res.json(ResponseFormatter.success(payload, `Retrieved details for PDC "${pdcName}".`));
 }));
 
 /**
@@ -144,7 +191,7 @@ router.post('/:collectionName/pdc', requireAuth, requireRoles(['admin', 'editor'
   const docSnap = await pdcDocRef.get();
 
   if (docSnap.exists) {
-    throw new Error(`PDC "${sanitizedPdc}" already exists in collection "${collectionName}". Use PUT to update.`);
+    throw new ConflictError(`PDC "${sanitizedPdc}" already exists in collection "${collectionName}". Use PUT to update.`);
   }
 
   const now = new Date().toISOString();
@@ -210,6 +257,8 @@ router.post('/:collectionName/pdc', requireAuth, requireRoles(['admin', 'editor'
 
   // Auto-increment schema_meta version for this collection
   await schemaMetaService.incrementVersion(collectionName);
+  collectionsCache.invalidatePrefix(`list:${collectionName}`);
+  collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdc}`);
 
   res.status(201).json(ResponseFormatter.success({
     pdcName: sanitizedPdc,
@@ -300,6 +349,8 @@ router.put('/:collectionName/pdc/:pdcName', requireAuth, requireRoles(['admin', 
 
   // Auto-increment schema_meta version for this collection
   await schemaMetaService.incrementVersion(collectionName);
+  collectionsCache.invalidatePrefix(`list:${collectionName}`);
+  collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdcName}`);
 
   res.json(ResponseFormatter.success({
     pdcName: sanitizedPdcName,
@@ -345,6 +396,8 @@ router.delete('/:collectionName/pdc/:pdcName', requireAuth, requireRoles(['admin
 
   // Auto-increment schema_meta version for this collection
   await schemaMetaService.incrementVersion(collectionName);
+  collectionsCache.invalidatePrefix(`list:${collectionName}`);
+  collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdcName}`);
 
   res.json(ResponseFormatter.success(null, `Deleted PDC "${sanitizedPdcName}" and all its subcollections from "${collectionName}".`));
 }));
@@ -382,6 +435,8 @@ router.delete('/:collectionName/pdc/:pdcName/vehicles/:vehicleName', requireAuth
 
   // Auto-increment schema_meta version for this collection
   await schemaMetaService.incrementVersion(collectionName);
+  collectionsCache.invalidatePrefix(`list:${collectionName}`);
+  collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdcName}`);
 
   res.json(ResponseFormatter.success(null, `Deleted vehicle "${sanitizedVehicleName}" from PDC "${sanitizedPdcName}".`));
 }));

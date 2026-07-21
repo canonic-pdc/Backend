@@ -300,6 +300,7 @@ export interface SchemaMetaDocument {
   JC2?: SchemaMetaEntry;
   Finishing?: SchemaMetaEntry;
   FinishingSet?: SchemaMetaEntry;
+  Ordinance?: SchemaMetaEntry;
   [key: string]: SchemaMetaEntry | undefined;
 }
 

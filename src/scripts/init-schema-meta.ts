@@ -31,6 +31,7 @@ async function initSchemaMeta(): Promise<void> {
     JC2: { version: 1, updatedAt: now },
     Finishing: { version: 1, updatedAt: now },
     FinishingSet: { version: 1, updatedAt: now },
+    Ordinance: { version: 1, updatedAt: now },
   };
 
   await metaDocRef.set(initialData);

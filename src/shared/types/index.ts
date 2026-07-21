@@ -10,10 +10,5 @@ export interface AuthenticatedRequest extends Request {
   user?: UserPrincipal;
 }
 
-export type AsyncRequestHandler = (
-  req: Request,
-  res: any,
-  next: any
-) => Promise<any> | any;
-
 export * from './database.types';
+

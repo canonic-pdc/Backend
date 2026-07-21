@@ -37,6 +37,9 @@ export class SchemaMetaService {
         return 'Finishing';
       case 'FinishingSet':
         return 'FinishingSet';
+      case 'Ordinance':
+      case 'ordinance':
+        return 'Ordinance';
       default:
         return null;
     }

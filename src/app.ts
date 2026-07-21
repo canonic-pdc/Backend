@@ -1,6 +1,5 @@
-import 'tsconfig-paths/register';
-import 'module-alias/register';
 import express from 'express';
+import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
 import config from './config/index';
@@ -10,6 +9,9 @@ import { errorHandler } from './shared/middleware/error-handler.middleware';
 import v1Routes from './routes/v1';
 
 const app = express();
+
+// Serve public directory statically for local development / non-Vercel environments
+app.use(express.static(path.join(__dirname, '../public')));
 
 // Security Middlewares
 app.use(helmet());

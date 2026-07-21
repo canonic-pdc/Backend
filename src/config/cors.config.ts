@@ -14,6 +14,8 @@ const parseCorsOrigin = (): CorsOptions['origin'] => {
 export const corsConfig: CorsOptions = {
   origin: parseCorsOrigin(),
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-ID', 'X-Device-Name'],
   credentials: true,
+  maxAge: 86400, // Browser caches preflight OPTIONS for 24 hours (86,400 seconds)
 };
+

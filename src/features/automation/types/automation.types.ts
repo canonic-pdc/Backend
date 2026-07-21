@@ -1,7 +1,7 @@
 import { Request } from 'express';
 import { UserDocument, UserAutomationMetadata, UserRole } from '@shared/types';
 
-export type AutomationSchemaType = 'DO' | 'JC1' | 'JC2' | 'Finishing' | 'FinishingSet';
+export type AutomationSchemaType = 'DO' | 'JC1' | 'JC2' | 'Finishing' | 'FinishingSet' | 'Ordinance';
 
 export interface CheckVersionQueryDto {
   type: AutomationSchemaType;

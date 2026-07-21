@@ -3,7 +3,10 @@ import { ResponseFormatter } from '@shared/responses';
 import { requireAuth, requireRoles } from '@shared/middleware/auth.middleware';
 import { asyncHandler } from '@shared/utils';
 import { FirebaseService } from '@infrastructure/firebase/firebase.service';
-import { AppError } from '@shared/errors';
+import { AppError, ConflictError } from '@shared/errors';
+import { OrdinanceDocument } from '@shared/types';
+import { Query } from 'firebase-admin/firestore';
+import schemaMetaService from '@features/automation/services/schemaMeta.service';
 
 const router = Router();
 
@@ -23,11 +26,26 @@ router.get('/', asyncHandler(async (req: any, res: Response) => {
     throw new AppError('Firebase Database not initialized', 503);
   }
 
-  const colRef = db.collection('Ordinance');
-  const snapshot = await colRef.get();
-  const ordinances = snapshot.docs.map(doc => ({
+  res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+
+  const limitParam = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const pageParam = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+  const offsetParam = req.query.offset ? parseInt(req.query.offset as string, 10) : (limitParam && pageParam > 1 ? (pageParam - 1) * limitParam : undefined);
+
+  let query: Query = db.collection('Ordinance');
+  if (typeof offsetParam === 'number' && !isNaN(offsetParam) && offsetParam > 0) {
+    query = query.offset(offsetParam);
+  }
+  if (typeof limitParam === 'number' && !isNaN(limitParam) && limitParam > 0) {
+    query = query.limit(limitParam);
+  }
+
+  const snapshot = await query.get();
+  const docs = snapshot.docs;
+
+  const ordinances = docs.map(doc => ({
     id: doc.id,
-    ...doc.data()
+    ...(doc.data() as Partial<OrdinanceDocument>)
   }));
 
   res.json(ResponseFormatter.success(ordinances, 'Ordinances retrieved successfully.'));
@@ -44,6 +62,8 @@ router.get('/:id', asyncHandler(async (req: any, res: Response) => {
     throw new AppError('Firebase Database not initialized', 503);
   }
 
+  res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+
   const docRef = db.collection('Ordinance').doc(id);
   const docSnap = await docRef.get();
 
@@ -53,7 +73,7 @@ router.get('/:id', asyncHandler(async (req: any, res: Response) => {
 
   res.json(ResponseFormatter.success({
     id: docSnap.id,
-    ...docSnap.data()
+    ...(docSnap.data() as Partial<OrdinanceDocument>)
   }, 'Ordinance retrieved successfully.'));
 }));
 
@@ -81,13 +101,13 @@ router.post('/', requireAuth, requireRoles(['admin', 'editor']), asyncHandler(as
   
   const docSnap = await docRef.get();
   if (docSnap.exists) {
-    throw new AppError(`Ordinance with title/id "${title}" already exists.`, 409);
+    throw new ConflictError(`Ordinance with title/id "${title}" already exists.`);
   }
 
   const now = new Date().toISOString();
   const creatorEmail = req.user?.email || 'unknown';
 
-  const newOrdinance = {
+  const newOrdinance: Partial<OrdinanceDocument> = {
     title,
     mainCode,
     subCodes: Array.isArray(subCodes) ? subCodes : [subCodes],
@@ -98,6 +118,7 @@ router.post('/', requireAuth, requireRoles(['admin', 'editor']), asyncHandler(as
   };
 
   await docRef.set(newOrdinance);
+  await schemaMetaService.incrementVersion('Ordinance');
 
   res.status(201).json(ResponseFormatter.success({
     id: ordId,
@@ -145,6 +166,7 @@ router.put('/:id', requireAuth, requireRoles(['admin', 'editor']), asyncHandler(
   }
 
   await docRef.update(updatePayload);
+  await schemaMetaService.incrementVersion('Ordinance');
 
   res.json(ResponseFormatter.success({
     id,
@@ -173,6 +195,7 @@ router.delete('/:id', requireAuth, requireRoles(['admin']), asyncHandler(async (
   }
 
   await docRef.delete();
+  await schemaMetaService.incrementVersion('Ordinance');
 
   res.json(ResponseFormatter.success(null, `Ordinance "${id}" deleted successfully.`));
 }));

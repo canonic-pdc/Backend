@@ -1,5 +1,17 @@
 import { FirebaseService } from '@infrastructure/firebase/firebase.service';
 import { AppError } from '@shared/errors';
+import {
+  RootCollectionName,
+  SubcollectionName,
+  JobCosting1Document,
+  JobCosting1Vehicle,
+  JobCosting2Document,
+  JobCosting2Vehicle,
+  DODocument,
+  DOVehicle,
+  OrdinanceDocument,
+  DetailListItem,
+} from '@shared/types';
 import { AutomationSchemaType } from '../types/automation.types';
 
 interface RawPdcData {
@@ -22,6 +34,10 @@ export class SchemaGeneratorService {
   }
 
   public async getFormattedSchema(type: AutomationSchemaType): Promise<Record<string, any>> {
+    if (type === 'Ordinance') {
+      return this.buildOrdinanceSchema();
+    }
+
     const pdcList = await this.fetchRootAndVehicles(type);
 
     switch (type) {
@@ -40,7 +56,7 @@ export class SchemaGeneratorService {
     }
   }
 
-  private getCollectionName(type: AutomationSchemaType): string {
+  private getCollectionName(type: AutomationSchemaType): RootCollectionName {
     switch (type) {
       case 'DO':
         return 'DO';
@@ -52,6 +68,8 @@ export class SchemaGeneratorService {
         return 'Finishing';
       case 'FinishingSet':
         return 'FinishingSet';
+      case 'Ordinance':
+        return 'Ordinance';
     }
   }
 
@@ -71,11 +89,12 @@ export class SchemaGeneratorService {
     const pdcList = await Promise.all(
       rootSnap.docs.map(async (rootDoc) => {
         const docId = rootDoc.id;
-        const docData = rootDoc.data();
-        const vSnap = await db.collection(colName).doc(docId).collection('vehicles').get();
+        const docData = rootDoc.data() as Partial<JobCosting1Document & JobCosting2Document & DODocument & OrdinanceDocument & { batchNumber?: string; kodeGudang?: string; warehouseCode?: string }>;
+        const subCol: SubcollectionName = 'vehicles';
+        const vSnap = await db.collection(colName).doc(docId).collection(subCol).get();
         const vehicles = vSnap.docs.map((v) => ({
           id: v.id,
-          ...v.data(),
+          ...(v.data() as Partial<JobCosting1Vehicle & JobCosting2Vehicle & DOVehicle & DetailListItem & { mobil?: any; describe?: any; productData?: any; code?: any }>),
         }));
         return {
           id: docId,
@@ -283,6 +302,28 @@ export class SchemaGeneratorService {
         vehicleModels,
       };
     }
+    return result;
+  }
+
+  private async buildOrdinanceSchema(): Promise<Record<string, any>> {
+    const db = FirebaseService.getInstance().getDb();
+    if (!db) {
+      throw new AppError('Firebase Database not initialized', 503);
+    }
+
+    const snap = await db.collection('Ordinance').get();
+    const result: Record<string, any> = {};
+
+    for (const doc of snap.docs) {
+      const data = doc.data() as Partial<OrdinanceDocument>;
+      result[doc.id] = {
+        title: data.title || '',
+        mainCode: data.mainCode || '',
+        subCodes: Array.isArray(data.subCodes) ? data.subCodes : [],
+        status: data.status || 'tambah',
+      };
+    }
+
     return result;
   }
 }

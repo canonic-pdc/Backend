@@ -39,7 +39,6 @@ Its primary purpose is to provide:
 - **Runtime**: Node.js (v20+)
 - **Application Framework**: Express.js (v4.x)
 - **Programming Language**: TypeScript (v5.x, strict typing enabled)
-- **Data Validation**: Zod (v3.x)
 - **Linter & Formatter**: ESLint (v9.x), Prettier (v3.x)
 - **Package Manager**: npm
 
@@ -61,45 +60,40 @@ backend/
 │   │   ├── app.config.ts
 │   │   ├── cors.config.ts
 │   │   ├── firebase.config.ts
-│   │   ├── logging.config.ts
-│   │   └── security.config.ts
+│   │   └── logging.config.ts
 │   │
 │   ├── features/              # Feature modules containing domain specific code
-│   │   ├── auth/
-│   │   ├── vehicles/
-│   │   ├── reconciliation/
-│   │   ├── export/
-│   │   ├── ordinance/
-│   │   ├── system/
-│   │   └── health/
-│   │       # Each feature includes:
-│   │       ├── controllers/   # Request/response controllers mapping to Express
-│   │       ├── services/      # Core business logic handlers
-│   │       ├── repositories/  # Database access layer abstraction
+│   │   └── automation/        # Schema automation, version checking, and API key management
+│   │       ├── controllers/   # Request/response controllers
+│   │       ├── services/      # Core business logic handlers (schemaGenerator, apiKey)
 │   │       ├── routes/        # Router configuration mapping paths to controllers
-│   │       ├── dto/           # Data Transfer Objects
-│   │       ├── validators/    # Zod payload schemas
-│   │       ├── interfaces/    # TypeScript contracts
-│   │       └── types/         # Domain-specific types
+│   │       └── types/         # Domain-specific DTOs and TypeScript interfaces
 │   │
 │   ├── routes/                # Central route aggregates (mounting /api/v1/...)
 │   │   └── v1/
+│   │       ├── auth.routes.ts
+│   │       ├── collections.routes.ts # Dynamic PDC & vehicle management across root collections
+│   │       ├── export.routes.ts
+│   │       ├── health.routes.ts
+│   │       ├── ordinance.routes.ts   # SOP and rules management
+│   │       ├── reconciliation.routes.ts
+│   │       ├── system.routes.ts
+│   │       ├── users.routes.ts       # User management and role assignment
+│   │       └── vehicles.routes.ts
 │   │
 │   ├── shared/                # Shared utilities, error types, and middleware layers
-│   │   ├── constants/         # HTTP codes and roles
-│   │   ├── errors/            # Custom AppError classes
-│   │   ├── middleware/        # Error handlers, request logging, auth, validation
+│   │   ├── constants/         # HTTP status codes
+│   │   ├── errors/            # Custom AppError classes (BadRequest, Conflict, NotFound, etc.)
+│   │   ├── middleware/        # Error handlers, request logging, authentication (requireAuth)
 │   │   ├── responses/         # Unified JSON response formatters
-│   │   ├── types/             # Shared TypeScript typings
-│   │   ├── utils/             # Helper utilities (e.g., asyncHandler)
-│   │   └── validators/        # Reusable schemas (e.g., pagination)
+│   │   ├── types/             # Shared TypeScript typings and Firestore schema contracts
+│   │   └── utils/             # Helper utilities (asyncHandler, cache, concurrency)
 │   │
 │   └── infrastructure/        # Core adapters and third-party API configurations
-│       ├── firebase/          # Firebase Admin SDK setups
-│       ├── database/          # Database connections (Firestore)
+│       ├── firebase/          # Firebase Service singleton (Firestore & Auth Admin SDK)
 │       ├── storage/           # Cloud Storage providers
 │       ├── logger/            # Console/Winston logger abstraction
-│       └── external-services/ # Outgoing mail / SMS / external web integrations
+│       └── external-services/ # Outgoing integrations
 ```
 
 ---
@@ -146,8 +140,6 @@ Configure these values in your `.env` file (see `.env.example` for details):
 | `NODE_ENV` | Environment identifier (e.g. `development`, `production`) | `development` |
 | `API_PREFIX` | Versioned route mounting path prefix | `/api/v1` |
 | `CORS_ORIGIN` | Allowed clients list mapped for CORS permissions | `http://localhost:5173` |
-| `JWT_SECRET` | Secret hash key for signing backend authentication tokens | `local-development-secret-key-12345` |
-| `JWT_EXPIRES_IN` | Session expiration parameter mapped for auth | `24h` |
 | `LOG_LEVEL` | Log filtering verbosity (e.g. `debug`, `info`, `error`) | `debug` |
 
 ---
@@ -159,13 +151,19 @@ All API routes are structured version-specifically under `/api/v1`. Currently, p
 | Route Path | Description | Access | Auth Required |
 |------------|-------------|--------|----------------|
 | `/health` | Server uptime status and environments checker | Public | No |
-| `/auth/login` | Exchanges user details for session token | Public | No |
+| `/auth/login` | Exchanges user credentials for token/profile | Public | No |
 | `/auth/logout` | Disables token session | Public | No |
-| `/auth/me` | Fetches active user data profile | Private | Yes |
+| `/auth/me` | Fetches active user profile | Private | Yes |
+| `/collections/:collectionName` | Retrieves list of all PDCs inside a root collection | Public / Cache | No (GET) / Yes (POST) |
+| `/collections/:collectionName/pdc/:pdcName` | Deep details and update/delete for specific PDC & vehicles | Public / Private | No (GET) / Yes (PUT/DELETE) |
+| `/users` | Lists users and manages role/profile administration | Private | Yes (Admin) |
+| `/automation/schema/check-version` | Checks version metadata and returns on-demand schema JSON | Private | Yes (API Key/Token) |
+| `/automation/keys` | Generates or regenerates API keys for automation devices | Private | Yes |
+| `/automation/users/:userId/reset-device` | Resets device binding for target user | Private | Yes (Admin) |
+| `/ordinance` | Pulls and manages ordinance SOP rules | Private | Yes |
 | `/vehicles` | Fetches registered inventory list / Adds vehicles | Private | Yes |
 | `/reconciliation` | Retrieves reports list containing audit matches | Private | Yes |
 | `/export/csv` | Initiates export task runner | Private | Yes |
-| `/ordinance` | Pulls ordinances list | Private | Yes |
 | `/system/info` | Retrieves server node capabilities details | Private | Yes |
 
 ---
@@ -174,8 +172,8 @@ All API routes are structured version-specifically under `/api/v1`. Currently, p
 
 - **File Naming**: Use camelCase for standard modules and helper functions. Use kebab-case for middleware (`error-handler.middleware.ts`) and routes (`auth.routes.ts`).
 - **Interfaces vs Types**: Use `interface` for structural service and class contracts. Use `type` for simple data containers, request bodies, or aliases.
-- **Error Handling**: Never use raw status codes in controllers. Throw appropriate shared errors (e.g., `BadRequestError`, `UnauthorizedError`) and handle formatting automatically in `errorHandler`.
-- **Validation**: Place payload constraints in `validators/` as Zod schemas. Route requests through `validateRequest` middleware to validate body parameters.
+- **Error Handling**: Never use raw status codes in controllers. Throw appropriate shared errors (e.g., `BadRequestError`, `UnauthorizedError`, `ConflictError`, `NotFoundError`) and handle formatting automatically in `errorHandler`.
+- **Validation**: Payload sanitization and data validation are handled cleanly inside route handlers and domain controllers with explicit TypeScript casting and error trapping.
 
 ---
 
@@ -196,8 +194,8 @@ Follow these steps to expand the backend with a new business domain (e.g., `repo
 
 ## Future Integration Roadmap
 
-- [ ] **Firebase Authentication**: Hook up Firebase Admin verification within the `requireAuth` middleware to inspect incoming JWTs.
-- [ ] **Firestore Database Client**: Initialize the Firestore Database inside `FirestoreProvider` to bind repositories with actual cloud collections.
+- [x] **Firebase Authentication**: Firebase Admin verification active within the `requireAuth` middleware inspecting incoming Bearer/ID tokens.
+- [x] **Firestore Database Client**: Singleton `FirebaseService` initializes Firestore Admin SDK connecting repositories and routes directly with cloud collections.
 - [ ] **Rate Limiting**: Hook up standard security limiters to prevent API route scraping.
 
 ---
@@ -216,7 +214,6 @@ In your Vercel Project Dashboard under **Settings -> Environment Variables**, co
 - `NODE_ENV`: `production`
 - `API_PREFIX`: `/api/v1`
 - `CORS_ORIGIN`: Comma-separated list of allowed frontend URLs (e.g., `https://canonic-pdc.vercel.app,http://localhost:5173`) or `*`.
-- `JWT_SECRET`: Production secret key for JWT signing.
 - `LOG_LEVEL`: `info`
 
 ### 3. How to Deploy

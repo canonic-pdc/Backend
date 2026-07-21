@@ -1,10 +1,11 @@
 import { Router, Response } from 'express';
 import { ResponseFormatter } from '@shared/responses';
-import { requireAuth, requireRoles } from '@shared/middleware/auth.middleware';
+import { requireAuth, requireRoles, userRoleCache } from '@shared/middleware/auth.middleware';
 import { asyncHandler } from '@shared/utils';
 import { FirebaseService } from '@infrastructure/firebase/firebase.service';
 import { AppError } from '@shared/errors';
 import { UserRole } from '@shared/types';
+import { Query } from 'firebase-admin/firestore';
 
 const router = Router();
 
@@ -21,9 +22,24 @@ router.get('/', asyncHandler(async (req: any, res: Response) => {
     throw new AppError('Firebase Database not initialized', 503);
   }
 
-  const colRef = db.collection('users');
-  const snapshot = await colRef.get();
-  const users = snapshot.docs.map(doc => ({
+  res.setHeader('Cache-Control', 'private, max-age=30, stale-while-revalidate=120');
+
+  const limitParam = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const pageParam = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+  const offsetParam = req.query.offset ? parseInt(req.query.offset as string, 10) : (limitParam && pageParam > 1 ? (pageParam - 1) * limitParam : undefined);
+
+  let query: Query = db.collection('users');
+  if (typeof offsetParam === 'number' && !isNaN(offsetParam) && offsetParam > 0) {
+    query = query.offset(offsetParam);
+  }
+  if (typeof limitParam === 'number' && !isNaN(limitParam) && limitParam > 0) {
+    query = query.limit(limitParam);
+  }
+
+  const snapshot = await query.get();
+  const docs = snapshot.docs;
+
+  const users = docs.map(doc => ({
     id: doc.id,
     ...doc.data()
   }));
@@ -66,6 +82,7 @@ router.put('/:userId/role', asyncHandler(async (req: any, res: Response) => {
     role,
     updatedAt: now
   });
+  userRoleCache.delete(userId);
 
   res.json(ResponseFormatter.success({
     id: userId,
@@ -100,6 +117,7 @@ router.delete('/:userId', asyncHandler(async (req: any, res: Response) => {
   }
 
   await docRef.delete();
+  userRoleCache.delete(userId);
 
   res.json(ResponseFormatter.success(null, `User "${userId}" profile deleted successfully.`));
 }));

@@ -80,6 +80,11 @@ export class FirebaseService {
 
       if (this.app) {
         this.db = getFirestore(this.app);
+        try {
+          this.db.settings({ preferRest: true });
+        } catch (settingsErr) {
+          console.warn('[FirebaseService] Could not set preferRest on Firestore:', settingsErr);
+        }
         console.log(`[FirebaseService] Firebase Admin SDK initialized successfully for Project ID: ${fbConfig.projectId || this.app.options.projectId || 'unknown'}`);
       } else {
         console.warn('[FirebaseService] Firebase Admin configuration incomplete. Service is uninitialized.');

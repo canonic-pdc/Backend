@@ -82,13 +82,19 @@ export const authAutomationMiddleware = async (
       userData.automationLastUsedAt = now;
       userData.automationLastUsedIp = ip;
     } else if (userData.registeredDeviceId === cleanDeviceId) {
-      // Authorized device scenario: Update timestamp and IP asynchronously in background
-      userRef.update({
-        automationLastUsedAt: now,
-        automationLastUsedIp: ip,
-      }).catch((err) => {
-        console.error('[Auth Automation Middleware] Background update failed:', err);
-      });
+      // Authorized device scenario: Throttled & awaited update to prevent Vercel container freeze issues
+      const lastUsedTimestamp = userData.automationLastUsedAt ? new Date(userData.automationLastUsedAt).getTime() : 0;
+      const isIpChanged = userData.automationLastUsedIp !== ip;
+      const isTimeThrottled = (Date.now() - lastUsedTimestamp) < 60000; // 60 seconds throttle
+
+      if (!isTimeThrottled || isIpChanged) {
+        await userRef.update({
+          automationLastUsedAt: now,
+          automationLastUsedIp: ip,
+        }).catch((err) => {
+          console.error('[Auth Automation Middleware] Update failed:', err);
+        });
+      }
 
       userData.automationLastUsedAt = now;
       userData.automationLastUsedIp = ip;

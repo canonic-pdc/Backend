@@ -1,5 +1,8 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import { ResponseFormatter } from '@shared/responses';
+import { asyncHandler } from '@shared/utils';
+import { FirebaseService } from '@infrastructure/firebase/firebase.service';
+import { AppError } from '@shared/errors';
 
 const router = Router();
 
@@ -20,5 +23,25 @@ router.get('/info', (req, res) => {
     )
   );
 });
+
+/**
+ * GET /api/v1/system/schema-meta/versions
+ * Lightweight endpoint for Frontend Web dashboard to retrieve the latest schema version numbers across all collections.
+ */
+router.get('/schema-meta/versions', asyncHandler(async (req: any, res: Response) => {
+  const db = FirebaseService.getInstance().getDb();
+  if (!db) {
+    throw new AppError('Firebase Database not initialized', 503);
+  }
+
+  res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
+
+  const metaDocRef = db.collection('system').doc('schema_meta');
+  const metaSnap = await metaDocRef.get();
+
+  const data = metaSnap.exists ? metaSnap.data() || {} : {};
+
+  res.json(ResponseFormatter.success(data, 'Schema metadata versions retrieved successfully.'));
+}));
 
 export default router;
