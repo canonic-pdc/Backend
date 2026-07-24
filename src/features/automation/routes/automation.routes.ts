@@ -37,4 +37,15 @@ router.post(
   asyncHandler(automationController.resetDevice as any)
 );
 
+/**
+ * POST /api/v1/automation/users/:userId/revoke
+ * Revoke API key for a user (Admin only).
+ */
+router.post(
+  '/users/:userId/revoke',
+  requireAuth,
+  requireRoles(['admin']),
+  asyncHandler(automationController.revokeKey as any)
+);
+
 export default router;

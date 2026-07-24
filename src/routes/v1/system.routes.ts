@@ -34,7 +34,7 @@ router.get('/schema-meta/versions', asyncHandler(async (req: any, res: Response)
     throw new AppError('Firebase Database not initialized', 503);
   }
 
-  res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
   const metaDocRef = db.collection('system').doc('schema_meta');
   const metaSnap = await metaDocRef.get();

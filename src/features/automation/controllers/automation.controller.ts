@@ -95,6 +95,20 @@ export class AutomationController {
     const result = await apiKeyService.resetDeviceBinding(targetUserId.trim());
     return res.status(200).json(result);
   }
+
+  /**
+   * POST /api/v1/automation/users/:userId/revoke
+   * Admin only: Revoke API key for target user.
+   */
+  public async revokeKey(req: AuthenticatedRequest, res: Response): Promise<Response> {
+    const targetUserId = req.params.userId;
+    if (!targetUserId || !targetUserId.trim()) {
+      throw new BadRequestError('Target userId is required');
+    }
+
+    const result = await apiKeyService.revokeKey(targetUserId.trim());
+    return res.status(200).json(result);
+  }
 }
 
 export default new AutomationController();

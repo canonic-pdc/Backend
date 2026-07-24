@@ -92,6 +92,42 @@ export class ApiKeyService {
       message: `Device binding for user ${targetUserId} has been successfully reset.`,
     };
   }
+  /**
+   * Revoke the API key for a given user by marking automationKeyStatus as 'revoked'.
+   */
+  public async revokeKey(targetUserId: string): Promise<{ success: boolean; message: string }> {
+    const db = FirebaseService.getInstance().getDb();
+    if (!db) {
+      throw new AppError('Firebase Database not initialized', 503);
+    }
+
+    const docRef = db.collection('users').doc(targetUserId);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+      throw new AppError(`Target user profile with ID ${targetUserId} does not exist`, 404);
+    }
+
+    const userData = docSnap.data() || {};
+    if (!userData.automationKeyHash) {
+      throw new AppError(`User ${targetUserId} does not have an API key`, 400);
+    }
+
+    if (userData.automationKeyStatus === 'revoked') {
+      return { success: true, message: `User ${targetUserId}'s API key is already revoked.` };
+    }
+
+    const now = new Date().toISOString();
+    await docRef.update({
+      automationKeyStatus: 'revoked',
+      updatedAt: now,
+    });
+
+    return {
+      success: true,
+      message: `API Key for user ${targetUserId} has been successfully revoked.`,
+    };
+  }
 }
 
 export default new ApiKeyService();

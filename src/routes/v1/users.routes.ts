@@ -6,6 +6,7 @@ import { FirebaseService } from '@infrastructure/firebase/firebase.service';
 import { AppError } from '@shared/errors';
 import { UserRole } from '@shared/types';
 import { Query } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 const router = Router();
 
@@ -114,6 +115,14 @@ router.delete('/:userId', asyncHandler(async (req: any, res: Response) => {
 
   if (!docSnap.exists) {
     throw new AppError(`User with ID "${userId}" not found.`, 404);
+  }
+
+  try {
+    await getAuth().deleteUser(userId);
+  } catch (error: any) {
+    if (error.code !== 'auth/user-not-found') {
+      throw new AppError(`Failed to delete Firebase Auth user: ${error.message}`, 500);
+    }
   }
 
   await docRef.delete();

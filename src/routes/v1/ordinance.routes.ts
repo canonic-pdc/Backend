@@ -7,6 +7,7 @@ import { AppError, ConflictError } from '@shared/errors';
 import { OrdinanceDocument } from '@shared/types';
 import { Query } from 'firebase-admin/firestore';
 import schemaMetaService from '@features/automation/services/schemaMeta.service';
+import { FirestoreBatchService } from '@infrastructure/firebase/firestore-batch.service';
 
 const router = Router();
 
@@ -117,8 +118,10 @@ router.post('/', requireAuth, requireRoles(['admin', 'editor']), asyncHandler(as
     updatedBy: creatorEmail
   };
 
-  await docRef.set(newOrdinance);
-  await schemaMetaService.incrementVersion('Ordinance');
+  const batch = new FirestoreBatchService();
+  batch.set(docRef, newOrdinance);
+  await schemaMetaService.incrementVersion('Ordinance', batch.getCurrentBatch());
+  await batch.commit();
 
   res.status(201).json(ResponseFormatter.success({
     id: ordId,
@@ -165,8 +168,10 @@ router.put('/:id', requireAuth, requireRoles(['admin', 'editor']), asyncHandler(
     updatePayload.status = status;
   }
 
-  await docRef.update(updatePayload);
-  await schemaMetaService.incrementVersion('Ordinance');
+  const batch = new FirestoreBatchService();
+  batch.update(docRef, updatePayload);
+  await schemaMetaService.incrementVersion('Ordinance', batch.getCurrentBatch());
+  await batch.commit();
 
   res.json(ResponseFormatter.success({
     id,
@@ -194,8 +199,10 @@ router.delete('/:id', requireAuth, requireRoles(['admin']), asyncHandler(async (
     throw new AppError(`Ordinance with ID "${id}" not found.`, 404);
   }
 
-  await docRef.delete();
-  await schemaMetaService.incrementVersion('Ordinance');
+  const batch = new FirestoreBatchService();
+  batch.delete(docRef);
+  await schemaMetaService.incrementVersion('Ordinance', batch.getCurrentBatch());
+  await batch.commit();
 
   res.json(ResponseFormatter.success(null, `Ordinance "${id}" deleted successfully.`));
 }));

@@ -1,16 +1,16 @@
 import { Router, Response } from 'express';
 import { ResponseFormatter } from '@shared/responses';
 import { requireAuth, requireRoles } from '@shared/middleware/auth.middleware';
-import { asyncHandler, pLimit, MemoryCache } from '@shared/utils';
-import { FirebaseService } from '@infrastructure/firebase/firebase.service';
-import schemaMetaService from '@features/automation/services/schemaMeta.service';
-import { ConflictError, NotFoundError } from '@shared/errors';
-import { RootCollectionName, JobCosting1Document, JobCosting1Vehicle, DetailListItem } from '@shared/types';
-import { Query } from 'firebase-admin/firestore';
+import { validateRequest } from '@shared/middleware/validation.middleware';
+import { createPdcSchema, updatePdcSchema } from '@shared/schemas/collections.schema';
+import { asyncHandler, MemoryCache } from '@shared/utils';
+import { BadRequestError } from '@shared/errors';
+import { RootCollectionName } from '@shared/types';
+import { CollectionsRepository } from '@infrastructure/repositories/collections.repository';
 
 const router = Router();
 const collectionsCache = new MemoryCache<any>(60); // 60 seconds TTL for collections sync data
-
+const repository = new CollectionsRepository();
 
 /**
  * Validates allowed root collections (`DO`, `Job Costing 1`, `Job Costing 2`, `Finishing`, `FinishingSet`).
@@ -18,16 +18,8 @@ const collectionsCache = new MemoryCache<any>(60); // 60 seconds TTL for collect
 function validateCollection(colName: string): asserts colName is RootCollectionName & ('Job Costing 1' | 'Job Costing 2' | 'DO' | 'Finishing' | 'FinishingSet') {
   const allowed: RootCollectionName[] = ['Job Costing 1', 'Job Costing 2', 'DO', 'Finishing', 'FinishingSet'];
   if (!allowed.includes(colName as RootCollectionName)) {
-    throw new Error(`Invalid collection name: ${colName}. Allowed: ${allowed.join(', ')}`);
+    throw new BadRequestError(`Invalid collection name: ${colName}. Allowed: ${allowed.join(', ')}`);
   }
-}
-
-/**
- * Helper to sanitize PDC names and Vehicle names
- */
-function sanitizeName(name: string): string {
-  if (!name) return 'unknown';
-  return name.trim().replace(/[/\\?%*:|"<>]/g, '_');
 }
 
 /**
@@ -50,56 +42,7 @@ router.get('/:collectionName', asyncHandler(async (req: any, res: Response) => {
     return res.json(ResponseFormatter.success(cachedData, `Retrieved ${cachedData.length} documents from "${collectionName}" (cached).`));
   }
 
-  const db = FirebaseService.getInstance().getDb();
-  if (!db) {
-    throw new Error('Firebase Firestore database not initialized');
-  }
-
-  let query: Query = db.collection(collectionName);
-  if (typeof offsetParam === 'number' && !isNaN(offsetParam) && offsetParam > 0) {
-    query = query.offset(offsetParam);
-  }
-  if (typeof limitParam === 'number' && !isNaN(limitParam) && limitParam > 0) {
-    query = query.limit(limitParam);
-  }
-
-  const rootSnapshot = await query.get();
-  const rootDocs = rootSnapshot.docs;
-
-  const limit = pLimit(15);
-
-  const allData = await Promise.all(
-    rootDocs.map(rootDoc => limit(async () => {
-      const docId = rootDoc.id;
-      const docData = rootDoc.data() as Partial<JobCosting1Document & { batch?: string; warehouseCode?: string }>;
-
-      const [vSnap, dSnap] = await Promise.all([
-        db.collection(collectionName).doc(docId).collection('vehicles').get(),
-        db.collection(collectionName).doc(docId).collection('detail_list').get()
-      ]);
-
-      const vehicles = vSnap.docs.map(v => ({
-        id: v.id,
-        name: v.id,
-        ...(v.data() as Partial<JobCosting1Vehicle>)
-      }));
-
-      const detailList = dSnap.docs.map(d => ({
-        id: d.id,
-        ...(d.data() as Partial<DetailListItem>)
-      }));
-
-      return {
-        id: docId,
-        pdcName: docId,
-        batchNumber: docData.batchNumber || docData.batch || '',
-        kodeGudang: docData.kodeGudang || docData.warehouseCode || '',
-        ...docData,
-        vehicles,
-        detailList
-      };
-    }))
-  );
+  const allData = await repository.getCollectionDocs(collectionName, limitParam, offsetParam);
 
   collectionsCache.set(cacheKey, allData);
 
@@ -116,51 +59,13 @@ router.get('/:collectionName/pdc/:pdcName', asyncHandler(async (req: any, res: R
 
   res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
 
-  const sanitizedPdc = sanitizeName(pdcName);
-  const cacheKey = `pdc:${collectionName}:${sanitizedPdc}`;
+  const cacheKey = `pdc:${collectionName}:${pdcName}`; // cache key does not need double sanitation for lookup
   const cachedData = collectionsCache.get(cacheKey);
   if (cachedData) {
     return res.json(ResponseFormatter.success(cachedData, `Retrieved details for PDC "${pdcName}" (cached).`));
   }
 
-  const db = FirebaseService.getInstance().getDb();
-  if (!db) {
-    throw new Error('Firebase Firestore database not initialized');
-  }
-
-  const pdcDocRef = db.collection(collectionName).doc(sanitizedPdc);
-  const docSnap = await pdcDocRef.get();
-
-  if (!docSnap.exists) {
-    throw new NotFoundError(`PDC "${pdcName}" not found in "${collectionName}".`);
-  }
-
-  const docData = (docSnap.data() || {}) as Partial<JobCosting1Document & { batch?: string; warehouseCode?: string }>;
-  const [vSnap, dSnap] = await Promise.all([
-    db.collection(collectionName).doc(sanitizedPdc).collection('vehicles').get(),
-    db.collection(collectionName).doc(sanitizedPdc).collection('detail_list').get()
-  ]);
-
-  const vehicles = vSnap.docs.map(v => ({
-    id: v.id,
-    name: v.id,
-    ...(v.data() as Partial<JobCosting1Vehicle>)
-  }));
-
-  const detailList = dSnap.docs.map(d => ({
-    id: d.id,
-    ...(d.data() as Partial<DetailListItem>)
-  }));
-
-  const payload = {
-    id: sanitizedPdc,
-    pdcName: sanitizedPdc,
-    batchNumber: docData.batchNumber || docData.batch || '',
-    kodeGudang: docData.kodeGudang || docData.warehouseCode || '',
-    ...docData,
-    vehicles,
-    detailList
-  };
+  const payload = await repository.getPdcDetails(collectionName, pdcName);
 
   collectionsCache.set(cacheKey, payload);
 
@@ -172,91 +77,14 @@ router.get('/:collectionName/pdc/:pdcName', asyncHandler(async (req: any, res: R
  * Create a new PDC with optional vehicles array.
  * Required roles: admin or editor.
  */
-router.post('/:collectionName/pdc', requireAuth, requireRoles(['admin', 'editor']), asyncHandler(async (req: any, res: Response) => {
+router.post('/:collectionName/pdc', requireAuth, requireRoles(['admin', 'editor']), validateRequest(createPdcSchema), asyncHandler(async (req: any, res: Response) => {
   const { collectionName } = req.params;
   validateCollection(collectionName);
 
-  const { pdcName, vehicles, batchNumber, kodeGudang } = req.body;
-  if (!pdcName || typeof pdcName !== 'string') {
-    throw new Error('Field "pdcName" (string) is required.');
-  }
-
-  const db = FirebaseService.getInstance().getDb();
-  if (!db) {
-    throw new Error('Firebase Firestore database not initialized');
-  }
-
-  const sanitizedPdc = sanitizeName(pdcName);
-  const pdcDocRef = db.collection(collectionName).doc(sanitizedPdc);
-  const docSnap = await pdcDocRef.get();
-
-  if (docSnap.exists) {
-    throw new ConflictError(`PDC "${sanitizedPdc}" already exists in collection "${collectionName}". Use PUT to update.`);
-  }
-
-  const now = new Date().toISOString();
   const creatorEmail = req.user?.email || 'system';
-
-  // 1. Create root document
-  const rootData = {
-    pdcName: sanitizedPdc,
-    batchNumber: batchNumber || '',
-    kodeGudang: kodeGudang || '',
-    createdAt: now,
-    updatedAt: now,
-    createdBy: creatorEmail,
-    updatedBy: creatorEmail
-  };
-
-  await pdcDocRef.set(rootData);
-
-  // 2. Create vehicle subcollection items if provided
-  let vehiclesCount = 0;
-  if (Array.isArray(vehicles)) {
-    for (const vehicle of vehicles) {
-      if (!vehicle.name && !vehicle.vehicleName) continue;
-      const vName = vehicle.name || vehicle.vehicleName;
-      const sanitizedVehicleName = sanitizeName(vName);
-      const vehicleDocRef = db.collection(collectionName).doc(sanitizedPdc).collection('vehicles').doc(sanitizedVehicleName);
-
-      let vehicleData: any = {};
-      if (collectionName === 'Job Costing 1' || collectionName === 'DO') {
-        vehicleData = {
-          productData: vehicle.productData || {},
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      } else if (collectionName === 'Job Costing 2') {
-        vehicleData = {
-          code: Array.isArray(vehicle.code) ? vehicle.code : [],
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      } else if (collectionName === 'Finishing') {
-        vehicleData = {
-          code: vehicle.code || vehicle.productData || {},
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      } else if (collectionName === 'FinishingSet') {
-        vehicleData = {
-          code: vehicle.code || vehicle.productData || '',
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      }
-
-      await vehicleDocRef.set(vehicleData);
-      vehiclesCount++;
-    }
-  }
-
-  // Auto-increment schema_meta version for this collection
-  await schemaMetaService.incrementVersion(collectionName);
+  
+  const { sanitizedPdc, vehiclesCount } = await repository.createPdc(collectionName, req.body, creatorEmail);
+  
   collectionsCache.invalidatePrefix(`list:${collectionName}`);
   collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdc}`);
 
@@ -271,84 +99,14 @@ router.post('/:collectionName/pdc', requireAuth, requireRoles(['admin', 'editor'
  * Updates metadata or adds/modifies vehicles in an existing PDC.
  * Required roles: admin or editor.
  */
-router.put('/:collectionName/pdc/:pdcName', requireAuth, requireRoles(['admin', 'editor']), asyncHandler(async (req: any, res: Response) => {
+router.put('/:collectionName/pdc/:pdcName', requireAuth, requireRoles(['admin', 'editor']), validateRequest(updatePdcSchema), asyncHandler(async (req: any, res: Response) => {
   const { collectionName, pdcName } = req.params;
   validateCollection(collectionName);
 
-  const { vehicles, batchNumber, kodeGudang } = req.body;
-  const db = FirebaseService.getInstance().getDb();
-  if (!db) {
-    throw new Error('Firebase Firestore database not initialized');
-  }
-
-  const sanitizedPdcName = sanitizeName(pdcName);
-  const pdcDocRef = db.collection(collectionName).doc(sanitizedPdcName);
-  const docSnap = await pdcDocRef.get();
-
-  if (!docSnap.exists) {
-    throw new Error(`PDC "${sanitizedPdcName}" not found in collection "${collectionName}".`);
-  }
-
-  const now = new Date().toISOString();
   const creatorEmail = req.user?.email || 'system';
 
-  // 1. Update root document metadata
-  const updatePayload: any = {
-    updatedAt: now,
-    updatedBy: creatorEmail
-  };
-  if (batchNumber !== undefined) updatePayload.batchNumber = batchNumber;
-  if (kodeGudang !== undefined) updatePayload.kodeGudang = kodeGudang;
+  const { sanitizedPdcName, vehiclesUpdated } = await repository.updatePdc(collectionName, pdcName, req.body, creatorEmail);
 
-  await pdcDocRef.update(updatePayload);
-
-  // 2. Upsert vehicles if provided
-  let vehiclesUpdated = 0;
-  if (Array.isArray(vehicles)) {
-    for (const vehicle of vehicles) {
-      if (!vehicle.name && !vehicle.vehicleName) continue;
-      const vName = vehicle.name || vehicle.vehicleName;
-      const sanitizedVehicleName = sanitizeName(vName);
-      const vehicleDocRef = db.collection(collectionName).doc(sanitizedPdcName).collection('vehicles').doc(sanitizedVehicleName);
-
-      let vehicleData: any = {};
-      if (collectionName === 'Job Costing 1' || collectionName === 'DO') {
-        vehicleData = {
-          productData: vehicle.productData || {},
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      } else if (collectionName === 'Job Costing 2') {
-        vehicleData = {
-          code: Array.isArray(vehicle.code) ? vehicle.code : [],
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      } else if (collectionName === 'Finishing') {
-        vehicleData = {
-          code: vehicle.code || vehicle.productData || {},
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      } else if (collectionName === 'FinishingSet') {
-        vehicleData = {
-          code: vehicle.code || vehicle.productData || '',
-          describe: vehicle.describe || '',
-          updatedAt: now,
-          updatedBy: creatorEmail
-        };
-      }
-
-      await vehicleDocRef.set(vehicleData);
-      vehiclesUpdated++;
-    }
-  }
-
-  // Auto-increment schema_meta version for this collection
-  await schemaMetaService.incrementVersion(collectionName);
   collectionsCache.invalidatePrefix(`list:${collectionName}`);
   collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdcName}`);
 
@@ -367,35 +125,8 @@ router.delete('/:collectionName/pdc/:pdcName', requireAuth, requireRoles(['admin
   const { collectionName, pdcName } = req.params;
   validateCollection(collectionName);
 
-  const db = FirebaseService.getInstance().getDb();
-  if (!db) {
-    throw new Error('Firebase Firestore database not initialized');
-  }
+  const { sanitizedPdcName } = await repository.deletePdc(collectionName, pdcName);
 
-  const sanitizedPdcName = sanitizeName(pdcName);
-  const pdcDocRef = db.collection(collectionName).doc(sanitizedPdcName);
-  const docSnap = await pdcDocRef.get();
-
-  if (!docSnap.exists) {
-    throw new Error(`PDC "${sanitizedPdcName}" not found in collection "${collectionName}".`);
-  }
-
-  // Delete subcollections first
-  const vehiclesSnap = await db.collection(collectionName).doc(sanitizedPdcName).collection('vehicles').get();
-  for (const vDoc of vehiclesSnap.docs) {
-    await db.collection(collectionName).doc(sanitizedPdcName).collection('vehicles').doc(vDoc.id).delete();
-  }
-
-  const detailsSnap = await db.collection(collectionName).doc(sanitizedPdcName).collection('detail_list').get();
-  for (const dDoc of detailsSnap.docs) {
-    await db.collection(collectionName).doc(sanitizedPdcName).collection('detail_list').doc(dDoc.id).delete();
-  }
-
-  // Delete parent document
-  await pdcDocRef.delete();
-
-  // Auto-increment schema_meta version for this collection
-  await schemaMetaService.incrementVersion(collectionName);
   collectionsCache.invalidatePrefix(`list:${collectionName}`);
   collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdcName}`);
 
@@ -411,30 +142,8 @@ router.delete('/:collectionName/pdc/:pdcName/vehicles/:vehicleName', requireAuth
   const { collectionName, pdcName, vehicleName } = req.params;
   validateCollection(collectionName);
 
-  const db = FirebaseService.getInstance().getDb();
-  if (!db) {
-    throw new Error('Firebase Firestore database not initialized');
-  }
+  const { sanitizedPdcName, sanitizedVehicleName } = await repository.deleteVehicle(collectionName, pdcName, vehicleName);
 
-  const sanitizedPdcName = sanitizeName(pdcName);
-  const sanitizedVehicleName = sanitizeName(vehicleName);
-
-  const pdcDocRef = db.collection(collectionName).doc(sanitizedPdcName);
-  const pdcSnap = await pdcDocRef.get();
-  if (!pdcSnap.exists) {
-    throw new Error(`PDC "${sanitizedPdcName}" not found.`);
-  }
-
-  const vehicleDocRef = db.collection(collectionName).doc(sanitizedPdcName).collection('vehicles').doc(sanitizedVehicleName);
-  const vehicleSnap = await vehicleDocRef.get();
-  if (!vehicleSnap.exists) {
-    throw new Error(`Vehicle "${sanitizedVehicleName}" not found inside PDC "${sanitizedPdcName}".`);
-  }
-
-  await vehicleDocRef.delete();
-
-  // Auto-increment schema_meta version for this collection
-  await schemaMetaService.incrementVersion(collectionName);
   collectionsCache.invalidatePrefix(`list:${collectionName}`);
   collectionsCache.delete(`pdc:${collectionName}:${sanitizedPdcName}`);
 

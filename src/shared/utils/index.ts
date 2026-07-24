@@ -13,4 +13,4 @@ export const asyncHandler = (
 
 export * from './concurrency.util';
 export * from './cache.util';
-
+export * from './vehicle-formatter.util';

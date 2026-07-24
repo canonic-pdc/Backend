@@ -1,4 +1,4 @@
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, WriteBatch } from 'firebase-admin/firestore';
 import { FirebaseService } from '@infrastructure/firebase/firebase.service';
 import { logger } from '@infrastructure/logger/winston.logger';
 import { AutomationSchemaType } from '../types/automation.types';
@@ -48,7 +48,7 @@ export class SchemaMetaService {
   /**
    * Automatically increments the version number and updates updatedAt for the given module in /system/schema_meta.
    */
-  public async incrementVersion(colNameOrType: string): Promise<void> {
+  public async incrementVersion(colNameOrType: string, batch?: WriteBatch): Promise<void> {
     const schemaKey = this.getSchemaKey(colNameOrType);
     if (!schemaKey) {
       return; // Not a schema-tracked collection
@@ -63,18 +63,20 @@ export class SchemaMetaService {
     try {
       const metaDocRef = db.collection('system').doc('schema_meta');
       const now = new Date().toISOString();
-
-      await metaDocRef.set(
-        {
-          [schemaKey]: {
-            version: FieldValue.increment(1),
-            updatedAt: now,
-          },
+      const payload = {
+        [schemaKey]: {
+          version: FieldValue.increment(1),
+          updatedAt: now,
         },
-        { merge: true }
-      );
+      };
 
-      logger.info(`[SchemaMetaService] Successfully incremented schema version for "${schemaKey}"`);
+      if (batch) {
+        batch.set(metaDocRef, payload, { merge: true });
+        logger.info(`[SchemaMetaService] Appended schema version increment for "${schemaKey}" to batch`);
+      } else {
+        await metaDocRef.set(payload, { merge: true });
+        logger.info(`[SchemaMetaService] Successfully incremented schema version for "${schemaKey}"`);
+      }
     } catch (error: any) {
       logger.error(`[SchemaMetaService] Failed to increment schema version for "${colNameOrType}": ${error.message || error}`);
     }

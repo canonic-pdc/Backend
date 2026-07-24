@@ -54,7 +54,7 @@ To make integration unmistakable for both developers and users, every endpoint i
 
 | Consumer Category | Auth Required | Primary Use Cases | Endpoints Included |
 | :--- | :--- | :--- | :--- |
-| **🌐 Web Frontend (FE)** | `requireAuth`<br>*(Firebase ID Token)* | Interactive web dashboards, user login/session sync, PDC & vehicle CRUD management, RBAC user administration, CLI key generation, reports. | • `/api/v1/auth/*` (Login, Me, Logout)<br>• `/api/v1/system/info`<br>• `/api/v1/system/schema-meta/versions`<br>• `/api/v1/collections/*` (All CRUD)<br>• `/api/v1/ordinance` (`POST`, `PUT`, `DELETE`)<br>• `/api/v1/automation/keys` (Generate CLI Key)<br>• `/api/v1/automation/users/:id/reset-device`<br>• `/api/v1/users/*` (RBAC Admin)<br>• `/api/v1/vehicles`, `/reconciliation`, `/export/csv` |
+| **🌐 Web Frontend (FE)** | `requireAuth`<br>*(Firebase ID Token)* | Interactive web dashboards, user login/session sync, PDC & vehicle CRUD management, RBAC user administration, CLI key generation, reports. | • `/api/v1/auth/me`<br>• `/api/v1/system/info`<br>• `/api/v1/system/schema-meta/versions`<br>• `/api/v1/collections/*` (All CRUD)<br>• `/api/v1/ordinance` (`POST`, `PUT`, `DELETE`)<br>• `/api/v1/automation/keys` (Generate CLI Key)<br>• `/api/v1/automation/users/:id/*`<br>• `/api/v1/users/*` (RBAC Admin)<br>• `/api/v1/vehicles`, `/reconciliation`, `/export/csv` |
 | **🤖 Automation CLI** | `authAutomationMiddleware`<br>*(API Key + Device ID)* | Local Python/Node scripts or factory device terminals checking schema versions and downloading dynamic pure JSON datasets (`1 Key = 1 Device`). | • `/api/v1/automation/schema/check-version` |
 | **🔄 Mixed / Both** | Public or Cached | General monitoring, server uptime status, and public/read-only retrieval of Ordinance SOP rules. | • `/api/v1/health`<br>• `/api/v1/ordinance` (`GET /` and `GET /:id`) |
 
@@ -143,37 +143,7 @@ Lightweight endpoint specifically tailored for Web Frontend (`React + TypeScript
 
 ## 🔐 3. Authentication & User Profile (`/api/v1/auth`)
 
-### 3.1 Verify & Sync User Session
-🏷️ **Target Category:** `🌐 Web Frontend (FE)`  
-Hits the server immediately after Google OAuth sign-in to verify token integrity, auto-register first-time users into Firestore (`/users/{uid}` with default `viewer` role), and return the active profile payload.
-
-- **URL:** `/api/v1/auth/login`
-- **Method:** `POST`
-- **Access:** Private (`requireAuth`)
-- **Headers Required:**
-  ```http
-  Authorization: Bearer <ID_TOKEN>
-  ```
-- **Request Body:** None (User identity is extracted from the ID Token)
-
-#### Response (`200 OK`)
-```json
-{
-  "success": true,
-  "message": "Login verified and synced successfully.",
-  "data": {
-    "user": {
-      "uid": "google_sub_or_firebase_uid_123",
-      "email": "user@canonic.com",
-      "role": "admin" // 'admin' | 'editor' | 'viewer'
-    }
-  }
-}
-```
-
----
-
-### 3.2 Get Current Authenticated Profile
+### 3.1 Get Current Authenticated Profile
 🏷️ **Target Category:** `🌐 Web Frontend (FE)`  
 Retrieves the active user profile and resolved role (`admin`, `editor`, or `viewer`).
 
@@ -195,26 +165,6 @@ Retrieves the active user profile and resolved role (`admin`, `editor`, or `view
     "email": "user@canonic.com",
     "role": "editor"
   }
-}
-```
-
----
-
-### 3.3 Logout Session Placeholder
-🏷️ **Target Category:** `🌐 Web Frontend (FE)`  
-Informs the server that the frontend session has ended.
-
-- **URL:** `/api/v1/auth/logout`
-- **Method:** `POST`
-- **Access:** Public / Session Cleanup
-- **Headers Required:** Optional (`Authorization: Bearer <ID_TOKEN>`)
-
-#### Response (`200 OK`)
-```json
-{
-  "success": true,
-  "message": "Logged out successfully.",
-  "data": null
 }
 ```
 
@@ -712,6 +662,34 @@ Resets the `registeredDeviceId` and `registeredDeviceName` of a target user, all
 
 ---
 
+### 6.4 Revoke Automation API Key (Admin Only)
+🏷️ **Target Category:** `🌐 Web Frontend (FE)` (Admin Panel)  
+Revokes the target user's active automation API key by clearing the hash and disabling access.
+
+- **URL:** `/api/v1/automation/users/:userId/revoke`
+- **Method:** `POST`
+- **Access:** Private (`requireAuth` + `requireRoles(['admin'])`)
+- **Headers Required:**
+  ```http
+  Authorization: Bearer <ID_TOKEN>
+  ```
+- **Path Parameters:**
+  - `userId` (string, required): The target user's Firebase UID.
+
+#### Response (`200 OK`)
+```json
+{
+  "success": true,
+  "message": "Automation API key revoked successfully.",
+  "data": {
+    "userId": "google_sub_or_firebase_uid_456",
+    "revokedAt": "2026-07-21T08:40:00.000Z"
+  }
+}
+```
+
+---
+
 ## 👥 7. User & Role Administration (`/api/v1/users`)
 
 All endpoints under `/api/v1/users` require **Admin** privileges (`requireAuth` + `requireRoles(['admin'])`).
@@ -803,7 +781,7 @@ Changes the role (`admin`, `editor`, `viewer`) of a specific user. Prevents self
 
 ### 7.3 Delete User Profile
 🏷️ **Target Category:** `🌐 Web Frontend (FE)`  
-Removes a user's profile document from Firestore. Prevents self-deletion.
+Removes a user's profile document from Firestore **and natively revokes the Firebase Auth session**. Prevents self-deletion.
 
 - **URL:** `/api/v1/users/:userId`
 - **Method:** `DELETE`
